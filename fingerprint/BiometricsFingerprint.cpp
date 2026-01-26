@@ -57,12 +57,19 @@ static T get(const std::string& path, const T& def) {
     return file.fail() ? def : result;
 }
 
+
 static std::string get(const std::string& path, const std::string& def) {
     std::ifstream file(path);
     std::string result;
-    file >> result;
+    if (file.is_open()) {
+        std::getline(file, result);
+    }
+    // Trim newline
+    if (!result.empty() && result.back() == '\n') {
+        result.pop_back();
+    }
     LOG(INFO) << "read path: " << path << ", value: " << result << "\n";
-    return file.fail() ? def : result;
+    return result.empty() ? def : result;
 }
 
 BiometricsFingerprint::BiometricsFingerprint() {
@@ -77,38 +84,18 @@ public:
         return mClientCallback->onEnrollResult(deviceId, fingerId, groupId, remaining);
     }
 
-    Return<void> onAcquired(
-    uint64_t deviceId,
-    vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo acquiredInfo,
-    int32_t vendorCode) {
+    Return<void> onAcquired(uint64_t deviceId, vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo acquiredInfo,
+        int32_t vendorCode) {
+        LOG(INFO) << "onAcquired: " << (int)acquiredInfo << ", vendorCode: " << vendorCode;
 
-    using AospAcquired =
-    android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo;
-
-    // Filter vendor-only finger down / up events
-    if (acquiredInfo ==
-            vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_VENDOR) {
-        if (vendorCode == 0) {
-            ALOGD("onAcquired: Finger down (vendor)");
-            return Void();
+        if (acquiredInfo == vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_VENDOR) {
+            // Ignore Oplus specific vendor codes that are just noise (0=FingerDown, 1=FingerUp)
+            if (vendorCode == 0 || vendorCode == 1) {
+                return Void();
+            }
         }
-        if (vendorCode == 1) {
-            ALOGD("onAcquired: Finger up (vendor)");
-            return Void();
-        }
+        return mClientCallback->onAcquired(deviceId, OplusToAOSPFingerprintAcquiredInfo(acquiredInfo), vendorCode);
     }
-
-    // Forward everything else - now returns plain enum, no cast needed
-    AospAcquired result = OplusToAOSPFingerprintAcquiredInfo(acquiredInfo);
-    ALOGD("onAcquired(%d)", static_cast<int>(result));
-
-    if (!mClientCallback->onAcquired(deviceId, result, vendorCode).isOk()) {
-        ALOGE("failed to invoke fingerprint onAcquired callback");
-    }
-
-    return Void();
-}
-
 
     Return<void> onAuthenticated(uint64_t deviceId, uint32_t fingerId, uint32_t groupId,
         const hidl_vec<uint8_t>& token) {
@@ -140,25 +127,17 @@ public:
 private:
     sp<android::hardware::biometrics::fingerprint::V2_1::IBiometricsFingerprintClientCallback> mClientCallback;
 
-    // Change return type - remove Return<>
-    android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo OplusToAOSPFingerprintAcquiredInfo(vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo info) {
+    Return<android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo> OplusToAOSPFingerprintAcquiredInfo(vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo info) {
         switch(info) {
-            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_GOOD: 
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_GOOD;
-            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_PARTIAL: 
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_PARTIAL;
-            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_INSUFFICIENT: 
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_INSUFFICIENT;
-            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_IMAGER_DIRTY: 
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_IMAGER_DIRTY;
-            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_SLOW: 
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_SLOW;
-            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_FAST: 
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_FAST;
-            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_VENDOR: 
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_VENDOR;
+            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_GOOD: return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_GOOD;
+            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_PARTIAL: return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_PARTIAL;
+            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_INSUFFICIENT: return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_INSUFFICIENT;
+            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_IMAGER_DIRTY: return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_IMAGER_DIRTY;
+            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_SLOW: return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_SLOW;
+            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_FAST: return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_TOO_FAST;
+            case vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_VENDOR: return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_VENDOR;
             default:
-                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_GOOD;
+                return android::hardware::biometrics::fingerprint::V2_1::FingerprintAcquiredInfo::ACQUIRED_VENDOR;
         }
     }
 
@@ -225,11 +204,7 @@ Return<uint64_t> BiometricsFingerprint::getAuthenticatorId()  {
 Return<RequestStatus> BiometricsFingerprint::cancel()  {
     RequestStatus ret = OplusToAOSPRequestStatus(mOplusBiometricsFingerprint->cancel());
     if (ret == RequestStatus::SYS_OK) {
-        const uint64_t devId = mOplusBiometricsFingerprint->setNotify(mOplusClientCallback);
-        vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintError err = vendor::oplus::hardware::biometrics::fingerprint::V2_1::FingerprintError::ERROR_CANCELED;
-        if (!mOplusClientCallback->onError(devId, err, 0).isOk()) {
-            ALOGE("failed to invoke fingerprint onError callback");
-        }
+        // ...
     }
     return ret;
 }
@@ -266,21 +241,16 @@ Return<void> BiometricsFingerprint::onShowUdfpsOverlay() {
             set(DIMLAYER_PATH, 1);
             set(FP_PRESS_PATH, 1);
         } else {
-            std::thread([]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                set(DIMLAYER_PATH, 1);
-            }).detach();
+            set(DIMLAYER_PATH, 1);
+            set(FP_PRESS_PATH, 1);
         }
     }
     return Void();
 }
 
 Return<void> BiometricsFingerprint::onFingerUp() {
-    if (!isUdfps(0)) return Void();
-    set(FP_PRESS_PATH, 0);
-    if (mOplusBiometricsFingerprint) {
-        mOplusBiometricsFingerprint->sendFingerprintCmd(
-            1 , hidl_vec<int8_t>());
+    if (isUdfps(0)) {
+        set(FP_PRESS_PATH, 0);
     }
     return Void();
 }
@@ -289,29 +259,19 @@ Return<bool> BiometricsFingerprint::isDozeMode() {
     return (get(POWER_STATUS_PATH, 0) == 1) || (get(POWER_STATUS_PATH, 0) == 3);
 }
 
-Return<void> BiometricsFingerprint::onFingerDown(
-        uint32_t, uint32_t, float, float) {
-
-    if (!isUdfps(0)) return Void();
-
-    set(DIMLAYER_PATH, 1);
-    set(FP_PRESS_PATH, 1);
-
-    if (mOplusBiometricsFingerprint) {
-        mOplusBiometricsFingerprint->sendFingerprintCmd(
-            0, hidl_vec<int8_t>());
+Return<void> BiometricsFingerprint::onFingerDown(uint32_t, uint32_t, float, float) {
+    if (isUdfps(0)) {
+        set(DIMLAYER_PATH, 1);
+        set(FP_PRESS_PATH, 1);
     }
-
     return Void();
 }
 
 Return<void> BiometricsFingerprint::onHideUdfpsOverlay() {
-    if (!isUdfps(0)) return Void();
-    std::thread([] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    if (isUdfps(0)) {
         set(DIMLAYER_PATH, 0);
         set(FP_PRESS_PATH, 0);
-    }).detach();
+    }
     return Void();
 }
 
